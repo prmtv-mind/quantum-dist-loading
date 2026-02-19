@@ -1,0 +1,36 @@
+# experiments/configs/config.yaml
+experiment:
+  name: "quantum_dist_loading"
+  description: "Benchmarking VQC distribution loading based on Dasgupta & Paine (2022)"
+  n_qubits: [3, 4]
+  random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+distributions:
+  binomial:
+    enabled: true
+    p: 0.5
+  poisson:
+    enabled: true
+    lambda: [1.5, 2.5]
+
+circuits:
+  types: ["linear", "circular", "alternating"]
+  depths: [1, 2, 3, 4]
+  gate_set:
+    single_qubit: ["ry"]
+    two_qubit: ["cz"]
+
+optimization:
+  max_iterations: 500
+  cobyla:
+    enabled: true
+    tol: 1.0e-4
+    trust_region: 1.0
+  spsa:
+    enabled: true
+    learning_rate: 0.01
+    perturbation: 0.01
+
+backend:
+  provider: "aer_simulator"
+  shots: 1000

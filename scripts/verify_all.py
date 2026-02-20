@@ -1,8 +1,4 @@
-"""
-Comprehensive verification script - ensures all components work correctly
-before running full experiments.
-"""
-
+# Replace the top imports section with this:
 import sys
 from pathlib import Path
 import numpy as np
@@ -24,7 +20,6 @@ from src.metrics.fidelity import DistributionMetrics
 from src.optimization.optimizer import QuantumOptimizer
 from src.optimization.spsa import SPSAOptimizer
 from src.utils.qiskit_compat import get_probability_distribution, get_exact_distribution
-
 
 def verify_distributions():
     """Verify all distributions work correctly."""

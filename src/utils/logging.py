@@ -3,11 +3,11 @@
 import logging
 import sys
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 def setup_logger(
     name: str,
-    log_file: Path = None,
+    log_file: Optional[Path] = None,
     level: Union[str, int] = logging.INFO
 ) -> logging.Logger:
     """

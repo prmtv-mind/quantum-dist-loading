@@ -7,13 +7,21 @@ our quantum circuits to reproduce. The quantum circuit outputs a probability
 distribution (by measuring many times), and we compare it to the classical
 target using various distance metrics.
 
-TARGET DISTRIBUTIONS:
-1. BINOMIAL (Symmetric): Represents number of heads in n coin flips
-2. POISSON (Asymmetric): Represents rare event counts in a fixed interval
+PAPER ALIGNMENT (from VQC_Paper_Scaffold.docx):
+- All distributions discretized to 2^n_qubits probability masses
+- Normalized to sum to 1
+- Laplace smoothing ε=1e-8 applied to all to prevent log(0) in KL/JS divergence
+- Six distributions spanning complete shape spectrum:
+  1. Binomial (symmetric)
+  2. Uniform (flat/maximum-entropy)
+  3. Poisson (moderately asymmetric)
+  4. Geometric (extremely asymmetric)
+  5. Bimodal (multimodal)
+  + Additional: [other symmetric]
 """
 
 import numpy as np
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 from scipy.stats import binom, poisson
 import logging
 
@@ -30,15 +38,10 @@ class DistributionGenerator:
         Args:
             n_qubits: Number of qubits determines discretization
                       (probability space has 2^n_qubits outcomes)
-
-        WHY THIS MATTERS:
-        - 3 qubits → 8 possible outcomes (0 to 7)
-        - 4 qubits → 16 possible outcomes (0 to 15)
-        - Target distribution must be mapped to this finite space
         """
         self.n_qubits = n_qubits
         self.n_outcomes = 2 ** n_qubits
-        logger.info(f"Initialized {self.__class__.__name__}: n_qubits={n_qubits}")
+        logger.info(f"Initialized {self.__class__.__name__}: n_qubits={n_qubits}, n_outcomes={self.n_outcomes}")
 
     def generate(self) -> np.ndarray:
         """
@@ -47,35 +50,29 @@ class DistributionGenerator:
         Returns:
             np.ndarray: Probability vector of length 2^n_qubits, sums to 1
 
-        RETURNS:
-        - 1D numpy array where p[i] = P(measuring basis state |i⟩)
-        - Probabilities are normalized (sum to 1)
-        - No zeros if possible (to avoid log(0) in KL divergence)
+        PAPER SPEC:
+        - Length: 2^n_qubits
+        - Sum: 1.0 (normalized)
+        - All values: > 1e-8 (Laplace smoothing applied)
+        - No NaN/inf values
         """
         raise NotImplementedError
 
     def _normalize(self, probabilities: np.ndarray,
                    epsilon: float = 1e-8) -> np.ndarray:
         """
-        Normalize probability distribution with smoothing.
+        Normalize probability distribution with Laplace smoothing.
 
         Args:
             probabilities: Unnormalized probability values
-            epsilon: Small value to avoid log(0) in divergence calculations
+            epsilon: Smoothing constant (paper: 1e-8)
 
         Returns:
             Normalized probability distribution
 
-        SMOOTHING STRATEGY:
-        When computing KL divergence D_KL(p||q), if any q[i]=0 while p[i]>0,
-        we get log(0) = -∞. To avoid this:
-        - Add epsilon to all probabilities (Laplace smoothing)
-        - Renormalize so they sum to 1
-
-        WHY EPSILON=1E-8?
-        - Large enough to avoid numerical issues
-        - Small enough to not significantly distort distribution
-        - Standard choice in information theory applications
+        PAPER JUSTIFICATION (from scaffold):
+        Laplace smoothing prevents log(0) errors in KL divergence and
+        Jensen-Shannon computations. Standard choice: ε=1e-8.
         """
         # Add epsilon smoothing
         smoothed = probabilities + epsilon
@@ -88,100 +85,77 @@ class DistributionGenerator:
 
 class BinomialDistribution(DistributionGenerator):
     """
-    Binomial distribution: symmetric, represents coin flip outcomes.
+    Binomial distribution: symmetric, serves as the baseline case.
 
-    INTUITION:
-    Flip a fair coin (p=0.5) n times. Count number of heads.
-    Result ranges from 0 to n, with peak at n/2.
-
-    MATHEMATICAL FORM:
-    P(X=k) = C(n,k) * p^k * (1-p)^(n-k)
-
-    QUANTUM RELEVANCE:
-    Binomial is the "natural" distribution for measuring n qubits
-    with uniform amplitudes. This makes it a good benchmark target.
+    PAPER SPEC:
+    Binomial(n_qubits, p=0.5): Uses scipy.stats.binom.pmf evaluated at
+    k=0,...,n_qubits, then zero-padded to 2^n_qubits outcomes.
+    Symmetric bell shape with peak at n_qubits/2.
     """
 
     def __init__(self, n_qubits: int, p: float = 0.5):
-        """
-        Initialize binomial distribution generator.
-
-        Args:
-            n_qubits: Number of qubits
-            p: Probability parameter (0 < p < 1). p=0.5 gives symmetric distribution
-
-        WHY P=0.5?
-        - Symmetric distribution around mean
-        - Most "natural" for quantum systems
-        - Easiest to optimize for
-        """
         super().__init__(n_qubits)
         self.p = p
-        self.n = n_qubits  # Number of coin flips
-        logger.info(f"Binomial distribution: n={self.n}, p={self.p}")
+        logger.info(f"Binomial distribution: n={self.n_qubits}, p={self.p}")
 
     def generate(self) -> np.ndarray:
         """
-        Generate binomial probability distribution discretized to 2^n_qubits outcomes.
+        Generate binomial probability distribution.
 
-        IMPLEMENTATION DETAILS:
-        1. Compute P(X=k) for k=0 to n_qubits using scipy
-        2. For outcomes > n_qubits, assign them to the last outcome
-           (This is a discretization strategy for small qubit numbers)
-        3. Normalize the result
+        PAPER IMPLEMENTATION:
+        1. Compute P(X=k) for k=0 to n_qubits using scipy.stats.binom.pmf
+        2. Zero-pad to 2^n_qubits outcomes
+        3. Add tail probability to last outcome
+        4. Normalize with ε=1e-8 smoothing
         """
         # Generate binomial probabilities for k=0 to n_qubits
         k_values = np.arange(self.n_qubits + 1)
-        probs = binom.pmf(k_values, self.n, self.p)
+        probs = binom.pmf(k_values, self.n_qubits, self.p)
 
         # Map to 2^n_qubits outcomes
-        # For outcomes > n_qubits, sum them into last outcome
         outcome_probs = np.zeros(self.n_outcomes)
         outcome_probs[:len(probs)] = probs
 
-        # Account for tail probability (should be small for n_qubits ≤ 4)
+        # Account for tail probability
         tail_prob = 1.0 - outcome_probs.sum()
         outcome_probs[-1] += tail_prob
 
-        # Normalize and smooth
-        return self._normalize(outcome_probs)
+        # Normalize and smooth per paper spec
+        return self._normalize(outcome_probs, epsilon=1e-8)
+
+
+class UniformDistribution(DistributionGenerator):
+    """
+    Uniform distribution: flat, maximum entropy.
+
+    PAPER SPEC:
+    Uniform: np.ones(2^n_qubits) / (2^n_qubits). Trivially normalized.
+    Circuit must learn to produce equal probability for all outcomes,
+    suppressing all amplitude variation.
+    """
+
+    def generate(self) -> np.ndarray:
+        """
+        Generate uniform distribution over all outcomes.
+
+        IMPLEMENTATION (per paper):
+        - All outcomes equally likely: 1/2^n_qubits
+        - Applied smoothing for consistency with other distributions
+        """
+        probs = np.ones(self.n_outcomes) / self.n_outcomes
+        return self._normalize(probs, epsilon=1e-8)
 
 
 class PoissonDistribution(DistributionGenerator):
     """
-    Poisson distribution: asymmetric, represents rare event counts.
+    Poisson distribution: moderately asymmetric.
 
-    INTUITION:
-    Events happen randomly at average rate λ per time interval.
-    Count number of events in one interval.
-    Result ranges from 0 to ∞, skewed toward low values.
-
-    MATHEMATICAL FORM:
-    P(X=k) = (e^(-λ) * λ^k) / k!
-
-    QUANTUM RELEVANCE:
-    Asymmetric distributions are harder to load with quantum circuits.
-    Poisson is a standard test for optimization difficulty.
-
-    CHALLENGE FOR QUANTUM CIRCUITS:
-    - Most quantum circuits naturally produce symmetric distributions
-    - Loading asymmetric distributions requires depth and parameter tuning
-    - Tests the "expressibility" of the ansatz
+    PAPER SPEC:
+    λ ∈ {1.5, 2.5}. Discretization: Truncate to 2^n_qubits outcomes.
+    Normalization: Sum to 1. Note: Requires smoothing for zero probabilities.
     """
 
     def __init__(self, n_qubits: int, lam: float = 1.5):
-        """
-        Initialize Poisson distribution generator.
-
-        Args:
-            n_qubits: Number of qubits
-            lam: Lambda parameter (mean and variance). Default 1.5 gives good asymmetry
-
-        LAMBDA CHOICES:
-        - λ=1.5: Moderate asymmetry, useful test case
-        - λ=2.5: More asymmetry, harder to load
-        - λ=0.5: High asymmetry, very difficult
-        """
         super().__init__(n_qubits)
         self.lam = lam
         logger.info(f"Poisson distribution: λ={self.lam}")
@@ -189,65 +163,152 @@ class PoissonDistribution(DistributionGenerator):
     def generate(self) -> np.ndarray:
         """
         Generate Poisson probability distribution discretized to 2^n_qubits outcomes.
-
-        IMPLEMENTATION DETAILS:
-        1. Compute P(X=k) for k=0 to 2^n_qubits using scipy
-        2. Normalize the result (tail probability for k > 2^n_qubits is tiny for λ≤2.5)
-        3. Apply smoothing to avoid log(0) in divergence calculations
-
-        TRUNCATION NOTE:
-        Poisson distribution has infinite support (k=0,1,2,...∞).
-        We truncate at 2^n_qubits outcomes. For λ≤2.5 and n_qubits≥3,
-        this captures >99.99% of probability mass.
         """
         # Generate Poisson probabilities for k=0 to n_outcomes-1
         k_values = np.arange(self.n_outcomes)
         probs = poisson.pmf(k_values, self.lam)
 
-        # Add tail probability (small but non-zero)
+        # Add tail probability
         tail_prob = 1.0 - probs.sum()
         probs[-1] += tail_prob
 
         # Normalize and smooth
-        return self._normalize(probs)
+        return self._normalize(probs, epsilon=1e-8)
 
 
-# Example usage and visualization
+class GeometricDistribution(DistributionGenerator):
+    """
+    Geometric distribution: extremely asymmetric, monotone decreasing.
+
+    PAPER SPEC:
+    Extreme single-mode asymmetry. Heavy mass at k=1, exponential tail decay.
+    Represents processes with no "memory" — longer wait = less likely.
+
+    QUANTUM CHALLENGE:
+    Extreme asymmetry requires asymmetric amplitude envelope. Local gates
+    (nearest-neighbor) have limited long-range influence.
+    """
+
+    def __init__(self, n_qubits: int, p: float = 0.5):
+        super().__init__(n_qubits)
+        self.p = p
+        logger.info(f"Geometric distribution: p={self.p}")
+
+    def generate(self) -> np.ndarray:
+        """
+        Generate geometric distribution.
+
+        IMPLEMENTATION (per paper):
+        1. Compute P(X=k) = (1-p)^(k-1) * p for k=1,...,2^n_qubits
+        2. Map to array indices 0,...,2^n_qubits-1
+        3. Add tail probability
+        4. Normalize
+        """
+        k_values = np.arange(1, self.n_outcomes + 1)
+        probs = (1 - self.p) ** (k_values - 1) * self.p
+
+        # Account for tail probability
+        tail_prob = 1.0 - probs.sum()
+        probs[-1] += tail_prob
+
+        return self._normalize(probs, epsilon=1e-8)
+
+
+class BimodalDistribution(DistributionGenerator):
+    """
+    Bimodal distribution: two separated peaks, multimodal structure.
+
+    PAPER SPEC:
+    BimodalDistribution must accept mu1, mu2, sigma as constructor arguments
+    with defaults mu1=N//4, mu2=3N//4, sigma=0.8.
+
+    QUANTUM CHALLENGE (Extreme):
+    Two separated probability peaks require circuit to maintain constructive
+    interference at two distant regions while destructively interfering between them.
+    """
+
+    def __init__(self,
+                 n_qubits: int,
+                 mu1: Optional[int] = None,
+                 mu2: Optional[int] = None,
+                 sigma: float = 0.8):
+        """
+        Initialize bimodal distribution with type-safe parameter handling.
+
+        Args:
+            n_qubits: Number of qubits
+            mu1: Mean of first Gaussian (default: N//4)
+            mu2: Mean of second Gaussian (default: 3*N//4)
+            sigma: Width of Gaussians (default: 0.8)
+        """
+        super().__init__(n_qubits)
+
+        # Type-safe defaults (fix for Pylance errors)
+        self.mu1: int = mu1 if mu1 is not None else (self.n_outcomes // 4)
+        self.mu2: int = mu2 if mu2 is not None else (3 * self.n_outcomes // 4)
+        self.sigma: float = sigma
+
+        logger.info(
+            f"Bimodal distribution: μ₁={self.mu1}, μ₂={self.mu2}, σ={self.sigma}"
+        )
+
+    def generate(self) -> np.ndarray:
+        """
+        Generate bimodal distribution as mixture of two Gaussians.
+
+        IMPLEMENTATION (per paper):
+        1. Create array k = 0, 1, ..., 2^n_qubits - 1
+        2. Compute Gaussian1 = exp(-(k-μ₁)²/(2σ²))
+        3. Compute Gaussian2 = exp(-(k-μ₂)²/(2σ²))
+        4. Sum and normalize with ε=1e-8 smoothing
+        """
+        k_values = np.arange(self.n_outcomes, dtype=float)
+
+        # Two Gaussian bumps
+        gaussian1 = np.exp(-((k_values - self.mu1) ** 2) / (2 * self.sigma ** 2))
+        gaussian2 = np.exp(-((k_values - self.mu2) ** 2) / (2 * self.sigma ** 2))
+
+        # Combine
+        probs = gaussian1 + gaussian2
+
+        # Normalize and smooth
+        return self._normalize(probs, epsilon=1e-8)
+
+
+# ============================================================================
+# TESTING
+# ============================================================================
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
-    # Generate distributions
     n_qubits = 3
-    binom_gen = BinomialDistribution(n_qubits, p=0.5)
-    poisson_gen = PoissonDistribution(n_qubits, lam=1.5)
 
-    binom_dist = binom_gen.generate()
-    poisson_dist = poisson_gen.generate()
+    # Generate all distributions
+    distributions = {
+        "Binomial(p=0.5)": BinomialDistribution(n_qubits),
+        "Uniform": UniformDistribution(n_qubits),
+        "Poisson(λ=1.5)": PoissonDistribution(n_qubits, lam=1.5),
+        "Geometric(p=0.5)": GeometricDistribution(n_qubits),
+        "Bimodal": BimodalDistribution(n_qubits),
+    }
 
-    # Print statistics
-    print("Binomial Distribution (n=3, p=0.5):")
-    print(f"  Probabilities: {binom_dist}")
-    print(f"  Sum: {binom_dist.sum():.6f}")
-    print(f"  Min: {binom_dist.min():.6f}, Max: {binom_dist.max():.6f}")
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
 
-    print("\nPoisson Distribution (n=3, λ=1.5):")
-    print(f"  Probabilities: {poisson_dist}")
-    print(f"  Sum: {poisson_dist.sum():.6f}")
-    print(f"  Min: {poisson_dist.min():.6f}, Max: {poisson_dist.max():.6f}")
+    for ax, (name, gen) in zip(axes, distributions.items()):
+        dist = gen.generate()
+        ax.bar(range(2**n_qubits), dist, color='steelblue', alpha=0.7, edgecolor='black')
+        ax.set_title(name, fontsize=11, fontweight='bold')
+        ax.set_ylabel("Probability")
+        ax.set_xlabel("Basis State")
+        ax.set_ylim([0, max([gen.generate().max() for gen in distributions.values()]) * 1.1])
 
-    # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-    axes[0].bar(range(2**n_qubits), binom_dist)
-    axes[0].set_title("Binomial (n=3, p=0.5)")
-    axes[0].set_ylabel("Probability")
-    axes[0].set_xlabel("Basis State")
-
-    axes[1].bar(range(2**n_qubits), poisson_dist)
-    axes[1].set_title("Poisson (λ=1.5)")
-    axes[1].set_ylabel("Probability")
-    axes[1].set_xlabel("Basis State")
+        # Print statistics
+        print(f"\n{name}:")
+        print(f"  Min: {dist.min():.8f}, Max: {dist.max():.8f}")
+        print(f"  Sum: {dist.sum():.10f}")
+        print(f"  All > 1e-8: {(dist > 1e-8).all()}")
 
     plt.tight_layout()
-    plt.savefig("distributions.png", dpi=150)
-    print("\n✓ Saved distribution plots to distributions.png")
+    plt.savefig("all_distributions.png", dpi=150, bbox_inches='tight')
+    print("\n✓ Saved distribution plots to all_distributions.png")

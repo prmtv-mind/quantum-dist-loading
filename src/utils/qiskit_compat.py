@@ -1,20 +1,54 @@
 """
-Qiskit 1.x execution utilities.
+Qiskit execution utilities with cross-version compatibility.
 
-Per paper scaffold (Section 5.1):
-"All experiments are conducted in simulation using Qiskit 1.2.4 and the
-Qiskit-Aer statevector and shot-based simulators."
-
-Uses only modern Qiskit 1.x APIs (Sampler primitive, no deprecated execute()).
+Supports both:
+- Qiskit 2.x primitives (`StatevectorSampler`)
+- Older Qiskit 1.x primitives (`Sampler`) as fallback
 """
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.primitives import Sampler
-from qiskit_aer import AerSimulator
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+try:
+    # Qiskit 2.x path
+    from qiskit.primitives import StatevectorSampler  # type: ignore
+except ImportError:
+    StatevectorSampler = None
+
+try:
+    # Qiskit 1.x fallback path
+    from qiskit.primitives import Sampler as LegacySampler  # type: ignore
+except ImportError:
+    LegacySampler = None
+
+try:
+    from qiskit_aer import AerSimulator  # type: ignore
+except ImportError:
+    AerSimulator = None
+
+from qiskit.quantum_info import Statevector
+
+
+def _has_measurements(circuit: QuantumCircuit) -> bool:
+    return any(instr.operation.name == "measure" for instr in circuit.data)
+
+
+def _prepare_measured_circuit(circuit: QuantumCircuit) -> QuantumCircuit:
+    meas_circuit = circuit.copy()
+    if not _has_measurements(meas_circuit):
+        meas_circuit.measure_all()
+    return meas_circuit
+
+
+def _prepare_statevector_circuit(circuit: QuantumCircuit) -> QuantumCircuit:
+    state_circuit = circuit.copy()
+    if _has_measurements(state_circuit):
+        state_circuit.remove_final_measurements(inplace=True)
+    return state_circuit
 
 
 def get_probability_distribution(
@@ -24,7 +58,7 @@ def get_probability_distribution(
     """
     Execute a quantum circuit and extract probability distribution.
 
-    Uses Qiskit 1.x Sampler primitive (paper Section 5.1).
+    Uses the available primitive for the installed Qiskit version.
 
     Args:
         circuit: Qiskit QuantumCircuit (without measurements)
@@ -36,26 +70,37 @@ def get_probability_distribution(
     n_qubits = circuit.num_qubits
     n_outcomes = 2 ** n_qubits
 
-    # Add measurements to circuit
-    meas_circuit = circuit.copy()
-    meas_circuit.measure_all()
+    meas_circuit = _prepare_measured_circuit(circuit)
+    probs = np.zeros(n_outcomes, dtype=float)
 
-    # Execute using Qiskit 1.x Sampler primitive
-    sampler = Sampler()
-    job = sampler.run([meas_circuit], shots=shots)
-    result = job.result()
+    if StatevectorSampler is not None:
+        sampler = StatevectorSampler()
+        result = sampler.run([meas_circuit], shots=shots).result()
+        joined: Any = result[0].join_data()
+        counts = joined.get_int_counts()
+        total = sum(counts.values())
+        if total == 0:
+            raise ValueError("Sampler returned zero total counts.")
+        for outcome_int, count in counts.items():
+            if outcome_int < n_outcomes:
+                probs[outcome_int] = count / total
+    elif LegacySampler is not None:
+        sampler = LegacySampler()
+        result = sampler.run([meas_circuit], shots=shots).result()
+        quasi_dist = result.quasi_dists[0]
+        for outcome_int, prob in quasi_dist.items():
+            if outcome_int < n_outcomes:
+                probs[outcome_int] = prob
+    else:
+        raise ImportError(
+            "No compatible Qiskit sampler primitive found "
+            "(expected StatevectorSampler or Sampler)."
+        )
 
-    # Extract quasi-distribution (probability from shots)
-    quasi_dist = result.quasi_dists[0]
-
-    # Convert to numpy array
-    probs = np.zeros(n_outcomes)
-    for outcome_int, prob in quasi_dist.items():
-        if outcome_int < n_outcomes:
-            probs[outcome_int] = prob
-
-    # Normalize (quasi_dist should already be normalized, but ensure)
-    return probs / probs.sum()
+    total_prob = probs.sum()
+    if total_prob <= 0:
+        raise ValueError("Probability vector is empty or non-positive.")
+    return probs / total_prob
 
 
 def get_exact_distribution(circuit: QuantumCircuit) -> np.ndarray:
@@ -73,20 +118,14 @@ def get_exact_distribution(circuit: QuantumCircuit) -> np.ndarray:
     n_qubits = circuit.num_qubits
     n_outcomes = 2 ** n_qubits
 
-    # Use AerSimulator with statevector method
-    sim = AerSimulator(method='statevector')
-
-    # Run circuit
-    job = sim.run(circuit)
-    result = job.result()
-
-    # Get statevector
-    statevector = result.get_statevector(circuit)
-
-    # Convert to probabilities
+    statevector = get_statevector(circuit)
     probs = np.abs(statevector) ** 2
 
-    return probs
+    if probs.shape[0] != n_outcomes:
+        raise ValueError(
+            f"Unexpected statevector length {probs.shape[0]} for {n_qubits} qubits."
+        )
+    return probs / probs.sum()
 
 
 def get_statevector(circuit: QuantumCircuit) -> np.ndarray:
@@ -99,7 +138,21 @@ def get_statevector(circuit: QuantumCircuit) -> np.ndarray:
     Returns:
         Complex statevector
     """
-    sim = AerSimulator(method='statevector')
-    job = sim.run(circuit)
-    result = job.result()
-    return np.array(result.get_statevector(circuit))
+    state_circuit = _prepare_statevector_circuit(circuit)
+
+    if AerSimulator is not None:
+        try:
+            sim_circuit = state_circuit.copy()
+            sim_circuit_any: Any = sim_circuit
+            sim_circuit_any.save_statevector()
+            sim = AerSimulator(method="statevector")
+            result = sim.run(sim_circuit).result()
+            return np.asarray(result.get_statevector(sim_circuit), dtype=complex)
+        except Exception as exc:
+            logger.warning(
+                "Aer statevector simulation failed; falling back to "
+                "qiskit.quantum_info.Statevector: %s",
+                exc,
+            )
+
+    return np.asarray(Statevector.from_instruction(state_circuit).data, dtype=complex)

@@ -1,92 +1,137 @@
-"""Quantum optimizer for variational circuits."""
+"""
+Optimizer wrapper for parameterized quantum circuits.
 
-from typing import Callable, Dict, Any, Optional, Tuple
+CLASSICAL OPTIMIZATION IN QUANTUM COMPUTING:
+1. Start with random parameters θ₀
+2. Evaluate quantum circuit: get probability distribution p(θ)
+3. Compute cost: distance between p(θ) and target
+4. Update parameters θ → θ - α∇cost
+5. Repeat until convergence
+
+We implement COBYLA (gradient-free) which works well for quantum circuits.
+Reference: Dasgupta & Paine (2022) - arXiv:2208.13372
+"""
+
 import numpy as np
+from typing import Callable, Tuple, Dict, Any, Optional
 from scipy.optimize import minimize
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 
 class QuantumOptimizer:
-    """Optimize variational quantum circuit parameters using classical optimizer."""
+    """Wrapper around scipy optimizers for quantum circuit parameter optimization."""
 
-    def __init__(self,
-                 cost_function: Callable[[np.ndarray], float],
+    def __init__(self, cost_function: Callable,
                  initial_params: np.ndarray,
                  method: str = "COBYLA",
-                 options: Optional[Dict[str, Any]] = None) -> None:
+                 options: Optional[Dict[str, Any]] = None):
         """
         Initialize optimizer.
 
         Args:
-            cost_function: Function mapping parameters to cost value
-            initial_params: Initial parameter values
-            method: Optimization method (COBYLA, SLSQP, L-BFGS-B, etc.)
-            options: Method-specific options dictionary
+            cost_function: Function to minimize. Should take parameter array
+                          and return scalar cost value
+            initial_params: Starting point for optimization
+            method: Optimizer method ("COBYLA", "Nelder-Mead", etc.)
+            options: Method-specific options (optional)
+
+        COBYLA RATIONALE:
+        - Gradient-free (no need to compute quantum gradients)
+        - Noisy function tolerant (good for quantum)
+        - Constraint handling (if needed later)
+        - Well-tested on VQE problems
         """
         self.cost_function = cost_function
         self.initial_params = initial_params.copy()
         self.method = method
-        self.options = options if options is not None else {}
+        # FIX: Properly handle None type
+        self.options: Dict[str, Any] = options if options is not None else {}
 
-        # Track convergence
+        # Set default options for COBYLA
+        if method == "COBYLA" and "maxiter" not in self.options:
+            self.options["maxiter"] = 500
+            self.options["tol"] = 1e-4
+
+        # Tracking
         self.cost_history = []
         self.param_history = []
-        self.n_evaluations = 0
+        self.iteration = 0
 
-    def _wrapped_cost_function(self, params: np.ndarray) -> float:
-        """Wrap cost function to track convergence."""
-        cost = self.cost_function(params)
+        logger.info(f"Initialized QuantumOptimizer: method={method}, options={self.options}")
+
+    def callback(self, xk: np.ndarray) -> None:
+        """
+        Called after each optimization iteration to track progress.
+
+        Args:
+            xk: Current parameter vector
+        """
+        cost = self.cost_function(xk)
         self.cost_history.append(cost)
-        self.param_history.append(params.copy())
-        self.n_evaluations += 1
-        return cost
+        self.param_history.append(xk.copy())
+        self.iteration += 1
+
+        if self.iteration % 50 == 0:
+            logger.info(f"Iteration {self.iteration}: cost = {cost:.6f}")
 
     def optimize(self) -> Tuple[np.ndarray, float, int]:
         """
-        Run optimization.
+        Run optimization to convergence.
 
         Returns:
-            Tuple of (optimized_params, final_cost, n_iterations)
+            Tuple of:
+            - Final parameters (optimal θ)
+            - Final cost value
+            - Number of iterations
+
+        IMPLEMENTATION NOTES:
+        - Uses scipy.optimize.minimize with selected method
+        - Callback tracks convergence history
+        - Returns optimization result with stats
         """
+        logger.info(f"Starting optimization with {self.method}")
+        start_time = time.time()
+
+        # Run optimization
         result = minimize(
-            self._wrapped_cost_function,
+            self.cost_function,
             self.initial_params,
             method=self.method,
+            callback=self.callback,
             options=self.options
         )
 
-        return result.x, result.fun, result.nit
+        elapsed_time = time.time() - start_time
 
-    def get_convergence_stats(self) -> Dict[str, Any]:
-        """Get optimization convergence statistics."""
-        if not self.cost_history:
-            return {}
+        # Get iteration count - use our callback counter (most reliable)
+        n_iterations = self.iteration
 
+        logger.info(
+            f"Optimization complete: {n_iterations} iterations, "
+            f"final cost = {result.fun:.6f}, "
+            f"time = {elapsed_time:.2f}s"
+        )
+
+        return result.x, result.fun, n_iterations
+
+    def get_convergence_stats(self) -> Dict[str, float]:
+        """
+        Compute convergence statistics.
+
+        Returns:
+            Dictionary with convergence metrics
+        """
         costs = np.array(self.cost_history)
 
         return {
             "initial_cost": float(costs[0]),
             "final_cost": float(costs[-1]),
-            "cost_improvement": float(costs[0] - costs[-1]),
-            "min_cost": float(np.min(costs)),
-            "mean_cost": float(np.mean(costs)),
-            "std_cost": float(np.std(costs)),
-            "n_evaluations": self.n_evaluations,
+            "cost_reduction": float(costs[0] - costs[-1]),
+            "percent_reduction": float(100 * (costs[0] - costs[-1]) / (costs[0] + 1e-10)),
+            "mean_cost": float(costs.mean()),
+            "std_cost": float(costs.std()),
+            "iterations": self.iteration,
         }
-
-
-# Example: simple test
-if __name__ == "__main__":
-    # Simple quadratic cost function
-    def quadratic_cost(x):
-        return np.sum((x - np.array([1.5, -2.0])) ** 2)
-
-    initial = np.array([0.0, 0.0])
-    optimizer = QuantumOptimizer(quadratic_cost, initial)
-
-    params, cost, iters = optimizer.optimize()
-    print(f"Optimized parameters: {params}")
-    print(f"Final cost: {cost:.6f}")
-    print(f"Iterations: {iters}")
-    print(f"\nConvergence stats:")
-    for key, val in optimizer.get_convergence_stats().items():
-        print(f"  {key}: {val}")

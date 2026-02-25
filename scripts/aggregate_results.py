@@ -104,7 +104,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Aggregate experiment results")
-    parser.add_argument("--mode", choices=["demo", "full"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "full"], default="full")
     args = parser.parse_args()
 
     # Load and aggregate

@@ -345,7 +345,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Extract results for paper writing")
-    parser.add_argument("--mode", choices=["demo", "full"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "full"], default="full")
     args = parser.parse_args()
 
     # Load summary

@@ -57,9 +57,8 @@ def aggregate_results(results: List[Dict]) -> pd.DataFrame:
         "l2_distance",
         "kl_divergence",
         "jensen_shannon",
-        "ks_statistic",
         "fidelity",
-        "initial_cost",
+        "initial_cost",     "ks_statistic",
         "final_cost",
         "iterations",
     ]

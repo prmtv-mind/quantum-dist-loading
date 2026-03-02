@@ -40,12 +40,12 @@ def compute_distribution_properties() -> pd.DataFrame:
         DataFrame with properties for each distribution
     """
     distributions = {
-        "binomial": BinomialDistribution(n_qubits=3),
-        "uniform": UniformDistribution(n_qubits=3),
-        "poisson_1.5": PoissonDistribution(n_qubits=3, lam=1.5),
-        "poisson_2.5": PoissonDistribution(n_qubits=3, lam=2.5),
-        "geometric": GeometricDistribution(n_qubits=3),
-        "bimodal": BimodalDistribution(n_qubits=3),
+        "binomial": BinomialDistribution(n_qubits=4),
+        "uniform": UniformDistribution(n_qubits=4),
+        "poisson_1.5": PoissonDistribution(n_qubits=4, lam=1.5),
+        "poisson_2.5": PoissonDistribution(n_qubits=4, lam=2.5),
+        "geometric": GeometricDistribution(n_qubits=4),
+        "bimodal": BimodalDistribution(n_qubits=4),
     }
 
     properties = []

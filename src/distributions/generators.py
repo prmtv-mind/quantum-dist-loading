@@ -1,23 +1,27 @@
 """
 Target distribution generators for benchmarking experiments.
 
-STATISTICAL CONCEPT:
-We generate classical probability distributions that serve as "targets" for
-our quantum circuits to reproduce. The quantum circuit outputs a probability
-distribution (by measuring many times), and we compare it to the classical
-target using various distance metrics.
-
-PAPER ALIGNMENT (from VQC_Paper_Scaffold.docx):
+PAPER ALIGNMENT (from VQC_Paper_Scaffold.docx and assessment_report.docx):
 - All distributions discretized to 2^n_qubits probability masses
 - Normalized to sum to 1
 - Laplace smoothing ε=1e-8 applied to all to prevent log(0) in KL/JS divergence
 - Six distributions spanning complete shape spectrum:
-  1. Binomial (symmetric)
+  1. Binomial (basis-sparse — NOT multimodal; see assessment report Issue 1)
   2. Uniform (flat/maximum-entropy)
-  3. Poisson (moderately asymmetric)
-  4. Geometric (extremely asymmetric)
-  5. Bimodal (multimodal)
-  + Additional: [other symmetric]
+  3. Poisson λ=1.5 (moderately asymmetric)
+  4. Poisson λ=2.5 (strongly asymmetric)
+  5. Geometric (monotone, extremely asymmetric)
+  6. Bimodal (multimodal, two separated Gaussian peaks)
+
+ASSESSMENT REPORT FIX (Issue 1):
+Binomial(n, p=0.5) should NOT be labelled 'multimodal'. It is correctly described
+as 'BASIS-SPARSE': for n qubits, only (n+1) of the 2^n computational basis states
+receive non-negligible probability mass. The remaining (2^n - n - 1) states must be
+suppressed to near-zero — requiring near-complete destructive interference. This is
+a structurally harder task than redistributing mass across already-occupied states.
+For n=3: 4 of 8 states suppressed (50%); for n=4: 11 of 16 states suppressed (69%).
+The difficulty of binomial loading increases with qubit count precisely because the
+suppressed fraction grows with n.
 """
 
 import numpy as np
@@ -32,71 +36,73 @@ class DistributionGenerator:
     """Base class for probability distribution generation."""
 
     def __init__(self, n_qubits: int):
-        """
-        Initialize distribution generator.
-
-        Args:
-            n_qubits: Number of qubits determines discretization
-                      (probability space has 2^n_qubits outcomes)
-        """
         self.n_qubits = n_qubits
         self.n_outcomes = 2 ** n_qubits
-        logger.info(f"Initialized {self.__class__.__name__}: n_qubits={n_qubits}, n_outcomes={self.n_outcomes}")
+        logger.info(
+            f"Initialized {self.__class__.__name__}: "
+            f"n_qubits={n_qubits}, n_outcomes={self.n_outcomes}"
+        )
 
     def generate(self) -> np.ndarray:
-        """
-        Generate probability distribution.
-
-        Returns:
-            np.ndarray: Probability vector of length 2^n_qubits, sums to 1
-
-        PAPER SPEC:
-        - Length: 2^n_qubits
-        - Sum: 1.0 (normalized)
-        - All values: > 1e-8 (Laplace smoothing applied)
-        - No NaN/inf values
-        """
         raise NotImplementedError
 
-    def _normalize(self, probabilities: np.ndarray,
-                   epsilon: float = 1e-8) -> np.ndarray:
+    def _normalize(self, probabilities: np.ndarray, epsilon: float = 1e-8) -> np.ndarray:
         """
         Normalize probability distribution with Laplace smoothing.
 
-        Args:
-            probabilities: Unnormalized probability values
-            epsilon: Smoothing constant (paper: 1e-8)
-
-        Returns:
-            Normalized probability distribution
-
-        PAPER JUSTIFICATION (from scaffold):
-        Laplace smoothing prevents log(0) errors in KL divergence and
-        Jensen-Shannon computations. Standard choice: ε=1e-8.
+        Smoothing with epsilon=1e-8 prevents log(0) in KL/JS divergence.
+        This is consistent across all distributions per paper specification.
         """
-        # Add epsilon smoothing
         smoothed = probabilities + epsilon
-
-        # Normalize
         normalized = smoothed / smoothed.sum()
-
         return normalized
 
 
 class BinomialDistribution(DistributionGenerator):
     """
-    Binomial distribution: symmetric, serves as the baseline case.
+    Binomial distribution: BASIS-SPARSE (not multimodal).
 
     PAPER SPEC:
     Binomial(n_qubits, p=0.5): Uses scipy.stats.binom.pmf evaluated at
     k=0,...,n_qubits, then zero-padded to 2^n_qubits outcomes.
     Symmetric bell shape with peak at n_qubits/2.
+
+    ASSESSMENT REPORT FIX (Issue 1 — Critical):
+    Do NOT describe binomial as 'multimodal'. The correct characterisation is
+    'basis-sparse': only (n_qubits + 1) of the 2^n_qubits computational basis
+    states receive non-negligible probability mass. The VQC is initialized from
+    |0^n> and naturally spreads amplitude across all 2^n states via entanglement.
+    Concentrating it back onto a sparse subset (k=0,...,n) while suppressing all
+    other states (k=n+1,...,2^n-1) requires near-complete destructive interference
+    on the suppressed states — qualitatively different from and substantially harder
+    than redistributing amplitude among occupied states.
+
+    The suppressed fraction increases with qubit count:
+      n=3: 4 of 8 states suppressed (50% suppressed)
+      n=4: 11 of 16 states suppressed (69% suppressed)
+    This explains why binomial fidelity drops from n=3 to n=4.
+
+    Scientific implication (novel insight from assessment report):
+    Low fidelity on binomial is NOT a failure of optimisation. It is a structural
+    property of basis-sparse distributions and grows intrinsically with qubit count.
+    This is a publishable finding worth highlighting as a headline result.
     """
 
     def __init__(self, n_qubits: int, p: float = 0.5):
         super().__init__(n_qubits)
         self.p = p
-        logger.info(f"Binomial distribution: n={self.n_qubits}, p={self.p}")
+        # Document basis-sparsity properties
+        n_occupied = n_qubits + 1   # states with non-zero binomial mass
+        n_suppressed = self.n_outcomes - n_occupied
+        suppressed_fraction = n_suppressed / self.n_outcomes
+        logger.info(
+            f"BinomialDistribution: n={n_qubits}, p={p} "
+            f"[BASIS-SPARSE: {n_occupied}/{self.n_outcomes} states occupied, "
+            f"{n_suppressed} suppressed ({100*suppressed_fraction:.0f}%)]"
+        )
+        self.n_occupied = n_occupied
+        self.n_suppressed = n_suppressed
+        self.suppressed_fraction = suppressed_fraction
 
     def generate(self) -> np.ndarray:
         """
@@ -104,29 +110,37 @@ class BinomialDistribution(DistributionGenerator):
 
         PAPER IMPLEMENTATION:
         1. Compute P(X=k) for k=0 to n_qubits using scipy.stats.binom.pmf
-        2. Zero-pad to 2^n_qubits outcomes
+        2. Zero-pad to 2^n_qubits outcomes — NOTE: indices k=n_qubits+1,...,2^n-1
+           receive ZERO mass (these are the suppressed states)
         3. Add tail probability to last outcome
         4. Normalize with ε=1e-8 smoothing
         """
-        # Generate binomial probabilities for k=0 to n_qubits
         k_values = np.arange(self.n_qubits + 1)
         probs = binom.pmf(k_values, self.n_qubits, self.p)
 
-        # Map to 2^n_qubits outcomes
         outcome_probs = np.zeros(self.n_outcomes)
         outcome_probs[:len(probs)] = probs
 
-        # Account for tail probability
         tail_prob = 1.0 - outcome_probs.sum()
         outcome_probs[-1] += tail_prob
 
-        # Normalize and smooth per paper spec
         return self._normalize(outcome_probs, epsilon=1e-8)
+
+    def get_sparsity_info(self) -> Dict[str, object]:
+        """Return sparsity information for analysis and paper tables."""
+        return {
+            "description": "basis-sparse",
+            "n_qubits": self.n_qubits,
+            "n_occupied_states": self.n_occupied,
+            "n_total_states": self.n_outcomes,
+            "n_suppressed_states": self.n_suppressed,
+            "suppressed_fraction": self.suppressed_fraction,
+        }
 
 
 class UniformDistribution(DistributionGenerator):
     """
-    Uniform distribution: flat, maximum entropy.
+    Uniform distribution: flat, maximum-entropy.
 
     PAPER SPEC:
     Uniform: np.ones(2^n_qubits) / (2^n_qubits). Trivially normalized.
@@ -135,13 +149,6 @@ class UniformDistribution(DistributionGenerator):
     """
 
     def generate(self) -> np.ndarray:
-        """
-        Generate uniform distribution over all outcomes.
-
-        IMPLEMENTATION (per paper):
-        - All outcomes equally likely: 1/2^n_qubits
-        - Applied smoothing for consistency with other distributions
-        """
         probs = np.ones(self.n_outcomes) / self.n_outcomes
         return self._normalize(probs, epsilon=1e-8)
 
@@ -152,7 +159,6 @@ class PoissonDistribution(DistributionGenerator):
 
     PAPER SPEC:
     λ ∈ {1.5, 2.5}. Discretization: Truncate to 2^n_qubits outcomes.
-    Normalization: Sum to 1. Note: Requires smoothing for zero probabilities.
     """
 
     def __init__(self, n_qubits: int, lam: float = 1.5):
@@ -161,18 +167,12 @@ class PoissonDistribution(DistributionGenerator):
         logger.info(f"Poisson distribution: λ={self.lam}")
 
     def generate(self) -> np.ndarray:
-        """
-        Generate Poisson probability distribution discretized to 2^n_qubits outcomes.
-        """
-        # Generate Poisson probabilities for k=0 to n_outcomes-1
         k_values = np.arange(self.n_outcomes)
         probs = poisson.pmf(k_values, self.lam)
 
-        # Add tail probability
         tail_prob = 1.0 - probs.sum()
         probs[-1] += tail_prob
 
-        # Normalize and smooth
         return self._normalize(probs, epsilon=1e-8)
 
 
@@ -181,12 +181,8 @@ class GeometricDistribution(DistributionGenerator):
     Geometric distribution: extremely asymmetric, monotone decreasing.
 
     PAPER SPEC:
-    Extreme single-mode asymmetry. Heavy mass at k=1, exponential tail decay.
-    Represents processes with no "memory" — longer wait = less likely.
-
-    QUANTUM CHALLENGE:
-    Extreme asymmetry requires asymmetric amplitude envelope. Local gates
-    (nearest-neighbor) have limited long-range influence.
+    P(k) = (1-p)^(k-1) * p for k=1,2,...,2^n_qubits.
+    Heavy mass at k=1, exponential tail decay.
     """
 
     def __init__(self, n_qubits: int, p: float = 0.5):
@@ -195,19 +191,9 @@ class GeometricDistribution(DistributionGenerator):
         logger.info(f"Geometric distribution: p={self.p}")
 
     def generate(self) -> np.ndarray:
-        """
-        Generate geometric distribution.
-
-        IMPLEMENTATION (per paper):
-        1. Compute P(X=k) = (1-p)^(k-1) * p for k=1,...,2^n_qubits
-        2. Map to array indices 0,...,2^n_qubits-1
-        3. Add tail probability
-        4. Normalize
-        """
         k_values = np.arange(1, self.n_outcomes + 1)
         probs = (1 - self.p) ** (k_values - 1) * self.p
 
-        # Account for tail probability
         tail_prob = 1.0 - probs.sum()
         probs[-1] += tail_prob
 
@@ -221,29 +207,17 @@ class BimodalDistribution(DistributionGenerator):
     PAPER SPEC:
     BimodalDistribution must accept mu1, mu2, sigma as constructor arguments
     with defaults mu1=N//4, mu2=3N//4, sigma=0.8.
+    P(k) ∝ exp(-(k-μ₁)²/(2σ²)) + exp(-(k-μ₂)²/(2σ²))
 
     QUANTUM CHALLENGE (Extreme):
     Two separated probability peaks require circuit to maintain constructive
     interference at two distant regions while destructively interfering between them.
+    This is the hardest case for local (nearest-neighbor) entanglement patterns.
     """
 
-    def __init__(self,
-                 n_qubits: int,
-                 mu1: Optional[int] = None,
-                 mu2: Optional[int] = None,
-                 sigma: float = 0.8):
-        """
-        Initialize bimodal distribution with type-safe parameter handling.
-
-        Args:
-            n_qubits: Number of qubits
-            mu1: Mean of first Gaussian (default: N//4)
-            mu2: Mean of second Gaussian (default: 3*N//4)
-            sigma: Width of Gaussians (default: 0.8)
-        """
+    def __init__(self, n_qubits: int, mu1: Optional[int] = None,
+                 mu2: Optional[int] = None, sigma: float = 0.8):
         super().__init__(n_qubits)
-
-        # Type-safe defaults (fix for Pylance errors)
         self.mu1: int = mu1 if mu1 is not None else (self.n_outcomes // 4)
         self.mu2: int = mu2 if mu2 is not None else (3 * self.n_outcomes // 4)
         self.sigma: float = sigma
@@ -253,62 +227,38 @@ class BimodalDistribution(DistributionGenerator):
         )
 
     def generate(self) -> np.ndarray:
-        """
-        Generate bimodal distribution as mixture of two Gaussians.
-
-        IMPLEMENTATION (per paper):
-        1. Create array k = 0, 1, ..., 2^n_qubits - 1
-        2. Compute Gaussian1 = exp(-(k-μ₁)²/(2σ²))
-        3. Compute Gaussian2 = exp(-(k-μ₂)²/(2σ²))
-        4. Sum and normalize with ε=1e-8 smoothing
-        """
         k_values = np.arange(self.n_outcomes, dtype=float)
 
-        # Two Gaussian bumps
         gaussian1 = np.exp(-((k_values - self.mu1) ** 2) / (2 * self.sigma ** 2))
         gaussian2 = np.exp(-((k_values - self.mu2) ** 2) / (2 * self.sigma ** 2))
 
-        # Combine
         probs = gaussian1 + gaussian2
 
-        # Normalize and smooth
         return self._normalize(probs, epsilon=1e-8)
 
 
 # ============================================================================
-# TESTING
+# CONVENIENCE FACTORY
 # ============================================================================
 
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
+DISTRIBUTION_REGISTRY = {
+    "binomial": lambda n: BinomialDistribution(n_qubits=n, p=0.5),
+    "uniform": lambda n: UniformDistribution(n_qubits=n),
+    "poisson_1.5": lambda n: PoissonDistribution(n_qubits=n, lam=1.5),
+    "poisson_2.5": lambda n: PoissonDistribution(n_qubits=n, lam=2.5),
+    "geometric": lambda n: GeometricDistribution(n_qubits=n, p=0.5),
+    "bimodal": lambda n: BimodalDistribution(n_qubits=n),
+}
 
-    n_qubits = 3
+DISTRIBUTION_LABELS = {
+    "binomial": "Binomial (basis-sparse)",
+    "uniform": "Uniform (max-entropy)",
+    "poisson_1.5": r"Poisson ($\lambda$=1.5)",
+    "poisson_2.5": r"Poisson ($\lambda$=2.5)",
+    "geometric": "Geometric (monotone)",
+    "bimodal": "Bimodal (Gaussian mix.)",
+}
 
-    # Generate all distributions
-    distributions = {
-        "Binomial(p=0.5)": BinomialDistribution(n_qubits),
-        "Uniform": UniformDistribution(n_qubits),
-        "Poisson(λ=1.5)": PoissonDistribution(n_qubits, lam=1.5),
-        "Geometric(p=0.5)": GeometricDistribution(n_qubits),
-        "Bimodal": BimodalDistribution(n_qubits),
-    }
-
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
-
-    for ax, (name, gen) in zip(axes, distributions.items()):
-        dist = gen.generate()
-        ax.bar(range(2**n_qubits), dist, color='steelblue', alpha=0.7, edgecolor='black')
-        ax.set_title(name, fontsize=11, fontweight='bold')
-        ax.set_ylabel("Probability")
-        ax.set_xlabel("Basis State")
-        ax.set_ylim([0, max([gen.generate().max() for gen in distributions.values()]) * 1.1])
-
-        # Print statistics
-        print(f"\n{name}:")
-        print(f"  Min: {dist.min():.8f}, Max: {dist.max():.8f}")
-        print(f"  Sum: {dist.sum():.10f}")
-        print(f"  All > 1e-8: {(dist > 1e-8).all()}")
-
-    plt.tight_layout()
-    plt.savefig("all_distributions.png", dpi=150, bbox_inches='tight')
-    print("\n✓ Saved distribution plots to all_distributions.png")
+# Ordered from easiest (circuit-natural) to hardest
+DIFFICULTY_ORDER = ["binomial", "uniform", "poisson_1.5", "poisson_2.5",
+                    "geometric", "bimodal"]

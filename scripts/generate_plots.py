@@ -10,6 +10,7 @@ Produces all publication-quality figures:
   6. Fidelity vs distribution complexity (entropy correlation)
   7. Convergence curves — iteration-cost history
   8. Distribution comparison panels — generated vs theoretical (per distribution)
+  9. Architecture Advantage: Symmetric vs Asymmetric Distributions (COBYLA, all depths, mean over seeds and qubit counts)
 
 ASSESSMENT REPORT FIXES applied:
   - ks_pvalue is NEVER shown in any figure (Issue 3)

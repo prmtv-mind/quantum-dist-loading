@@ -32,28 +32,6 @@ The experiments encompass **2,880 individual runs** across six distribution shap
 
 ---
 
-## Repository Structure
-
-```
-quantum-dist-loading/
-├── src/
-│   ├── algorithms.py          # Target generation, circuit construction, cost evaluation
-│   ├── optimizers.py          # COBYLA and SPSA wrappers
-│   ├── experiment_runner.py   # Full factorial runner
-│   └── metrics.py             # Fidelity, KL, JS, TV distance calculations
-├── config/                     # Factor level definitions
-├── notebooks/
-│   ├── 01_visualize_targets.ipynb
-│   ├── 02_analyze_results.ipynb
-│   └── 03_figures_paper.ipynb
-├── results/                    # JSON records per run, aggregated CSVs
-├── requirements.txt
-├── LICENSE
-└── README.md
-```
-
----
-
 ## Installation
 
 1. Clone the repository:
